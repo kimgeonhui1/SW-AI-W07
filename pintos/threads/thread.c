@@ -28,6 +28,8 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+static struct list sleep_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -62,6 +64,8 @@ static void init_thread (struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
+
+void thread_sleep(int64_t ticks);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -109,6 +113,8 @@ thread_init (void) {
 	lock_init (&tid_lock);
 	list_init (&ready_list);
 	list_init (&destruction_req);
+	// list_init은 연결 리스트 형태로 만들어줌 
+	list_init (&sleep_list);
 
 	/* Set up a thread structure for the running thread. */
 	initial_thread = running_thread ();
@@ -240,7 +246,12 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	// 리스트에 추가 방식(그냥 순서대로 추가)
+	sorted_ready_list_insert(t);
+
+	// 정렬되어 추가하는 방식
+	// sorted_list_push(&ready_list, &t->elem);
+
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -303,7 +314,7 @@ thread_yield (void) {
 
 	old_level = intr_disable ();
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
+		sorted_ready_list_insert(curr);
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
 }
@@ -587,4 +598,76 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+void thread_sleep(int64_t ticks){
+	// 현재 스레드 가져오기
+	struct thread *curr = thread_current();
+	enum intr_level old_level;
+
+	// 인터럽트 컨텍스트가 아닌 (인터럽트 된 상황이 아닌) 정상적인 스레드 실행 시에 동작
+    ASSERT (!intr_context ());
+	// CPU는 멈추면 안됨. 모든 스레드가 쉴 때 CPU가 헛돌기라도 할 수 있게 해주는 스레드가 idle_thread
+	// 즉, idle_thread가 curr이라면, 모든 스레드가 쉰다는 상태. 즉 오류 발생하기에 ASSERT(curr != idle_thread) 코드 작성 해줘야 함.
+    ASSERT (curr != idle_thread);
+
+	// 얼마나 잘건지(현재 틱 수 + 요구 틱 수) 정의
+	int64_t demand_tick = timer_ticks () + ticks;
+
+	// 얼마나 잘 건지를 현재 스레드에 저장
+	curr->wakeup_tick = demand_tick;
+
+	// 인터럽트 끄기 (끈 상태로 sleep_list에 저장해야함)(intr_disable()을 실행하면 기존 상태 반환(인터럽트가 켜져 있었는지 꺼져 있었는지))
+	// 왜 인터럽트를 꺼야 하는지 ? -> 연결 리스트로 구성된 sleep_list에 추가해야하는데, 추가하는 도중에 인터럽트가 나면
+	// 포인터 연결(즉, 연결 리스트(sleep_list) 추가가 다 안된 채로 마무리되어 sleep_list가 망가짐)이 다 안 된 상태에서 마무리되어서
+	old_level = intr_disable();
+
+	// sleep_list에 넣기
+	list_push_back(&sleep_list, &curr->elem);
+	
+	// list_push_back은 들어온 순서대로 저장하는 방식
+	// 나중에는 크기 순서대로 저장하는것도 추가해도 좋을 듯
+
+	// thread_block()으로 스레드를 완전히 재움
+	thread_block();
+
+	// sleep_list에서 ready_list로 들어갈 때는 인터럽트를 다시 켜줘야 하기에 (인터럽트 상태 복원)
+	// 그냥 intr_disable();하고 intr_set_level(); 하면 되는거 아니냐?
+	// 기존 상태(기존 인터럽트가 꺼져 있었으면 끄고, 켜져있었으면 켜놔야함)를 복원하기 위해 old_level 정의
+	intr_set_level (old_level);
+
+}
+
+void thread_awake(int64_t ticks){
+	// sleep_list 리스트의 첫번째 요소를 가리키는 e
+	struct list_elem *e = list_begin (&sleep_list);
+
+	while (e != list_end (&sleep_list)) {
+		// thread 구조체의 elem에 들어있는 e만 보고 있기에 전체 구조체를 가리키게 함
+		// e가 있는 struct thread 구조체의 시작 메모리를 가져와 t에 넣어
+    	struct thread *t = list_entry (e, struct thread, elem);
+
+    	if (timer_ticks() >= t->wakeup_tick) {
+        	// 깨우기 
+        	e = list_remove (e);        
+	        // ready_list 추가 
+    	    thread_unblock (t);
+    	}else e = list_next (e);
+	}
+}
+
+void sorted_ready_list_insert(struct thread * t){
+	struct list_elem *e;
+
+    for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) {
+        struct thread *entry = list_entry (e, struct thread, elem);
+
+        if (t->priority > entry->priority) {
+            list_insert (e, &t->elem);
+            return;
+        }
+    }
+
+	// 끝까지 다 돌았는데 기존의 스레드들이 나보다 다 우선순위가 높은 경우 맨 뒤에 넣기
+    list_insert (e, &t->elem);
 }

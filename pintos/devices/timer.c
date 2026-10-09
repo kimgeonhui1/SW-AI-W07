@@ -88,13 +88,23 @@ timer_elapsed (int64_t then) {
 }
 
 /* Suspends execution for approximately TICKS timer ticks. */
+/* 이전 버전(busy wait 방식)의 timer_sleep
 void
 timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
 
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+	while (timer_elapsed (start) < ticks) 	// 내 조건(내가 시작할 시간?)이 되었는지 확인 후
+		thread_yield ();					// 조건에 부합하지 않는다면(내가 시작할 시간이 되지 않았다면) 다른 스레드를 돌림 
+}
+*/
+
+void
+timer_sleep(int64_t ticks){
+	if (ticks <= 0)
+    return;
+
+  thread_sleep (ticks);
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -120,12 +130,13 @@ void
 timer_print_stats (void) {
 	printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+	thread_awake(ticks);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
