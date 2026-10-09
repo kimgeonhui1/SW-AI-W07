@@ -67,6 +67,8 @@ static tid_t allocate_tid (void);
 
 static bool priority_sort(const struct list_elem *,const struct list_elem *, void *aux UNUSED);
 
+static void thread_preemption(void);
+
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
 
@@ -210,6 +212,7 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
+	thread_preemption();
 
 	return tid;
 }
@@ -316,7 +319,26 @@ thread_yield (void) {
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+	thread_preemption();
 }
+
+// ready_list의 첫번째 요소(ready_list중 가장 우선순위가 높은 요소)와 실행중인 스레드를 비교하여
+// ready_list의 첫번째 요소가 더 우선순위가 높다면 바꿔주기
+void
+thread_preemption (void) {
+    if (intr_context ()) {
+        return;
+    }
+
+        return;
+    }
+
+    struct thread *highest = list_entry (list_begin (&ready_list), struct thread, elem);
+
+    if (thread_current ()->priority < highest->priority) thread_yield ();
+
+}
+
 
 /* Returns the current thread's priority. */
 int
