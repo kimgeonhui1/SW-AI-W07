@@ -65,9 +65,9 @@ static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
 
-static bool priority_sort(const struct list_elem *,const struct list_elem *, void *aux UNUSED);
+bool priority_sort(const struct list_elem *,const struct list_elem *, void *aux UNUSED);
 
-static void thread_preemption(void);
+void thread_preemption(void);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -330,6 +330,7 @@ thread_preemption (void) {
         return;
     }
 
+    if (list_empty (&ready_list)) {
         return;
     }
 
@@ -616,7 +617,7 @@ allocate_tid (void) {
 }
 
 
-static bool priority_sort(const struct list_elem *a,const struct list_elem *b, void *aux UNUSED)
+bool priority_sort(const struct list_elem *a,const struct list_elem *b, void *aux UNUSED)
 {
 	int64_t a_priority = list_entry(a, struct thread, elem)->priority;
 	int64_t b_priority = list_entry(b, struct thread, elem)->priority;

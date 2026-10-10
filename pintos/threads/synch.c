@@ -64,13 +64,18 @@ sema_down (struct semaphore *sema) {
 	ASSERT (sema != NULL);
 	ASSERT (!intr_context ());
 
-	old_level = intr_disable ();
-	while (sema->value == 0) {
-		list_push_back (&sema->waiters, &thread_current ()->elem);
-		thread_block ();
+	old_level = intr_disable ();// 인터럽트 비활성화
+
+	while (sema->value == 0) {	// 가용가능한 공유자원이 없는 경우
+
+		list_insert_ordered(&sema->waiters, &thread_current()->elem, priority_sort, NULL); // waiters에 넣기(우선순위 순서대로)
+		
+		thread_block ();		// 스레드 block 
 	}
-	sema->value--;
-	intr_set_level (old_level);
+
+	sema->value--;				// 공유자원을 하나 차지했음으로 -1
+
+	intr_set_level (old_level); // 인터럽트 복원
 }
 
 /* Down or "P" operation on a semaphore, but only if the
@@ -108,12 +113,19 @@ sema_up (struct semaphore *sema) {
 
 	ASSERT (sema != NULL);
 
-	old_level = intr_disable ();
+	old_level = intr_disable ();		// 인터럽트 비활성화
 	if (!list_empty (&sema->waiters))
+
+	// sema->waiters에 있는 스레드가 있다면 맨 앞의 스레드를 꺼내 thread_unblock()을 호출하여 ready_list로 올리기
 		thread_unblock (list_entry (list_pop_front (&sema->waiters),
 					struct thread, elem));
-	sema->value++;
-	intr_set_level (old_level);
+
+	sema->value++;						// 공유 자원을 다 썼으니 +1 (이제 다른 스레드가 사용 가능)
+
+	intr_set_level (old_level);			// 인터럽트 복원
+
+	thread_preemption();			// waiters에 있던 스레드가 현재 실행중인 스레드의 우선순위보다 높을 수 있음 
+
 }
 
 static void sema_test_helper (void *sema_);
