@@ -41,12 +41,15 @@
 
    - up or "V": increment the value (and wake up one waiting
    thread, if any). */
+bool cond_sort(const struct list_elem *a,const struct list_elem *b, void *aux UNUSED);
+
+
 void
 sema_init (struct semaphore *sema, unsigned value) {
-	ASSERT (sema != NULL);
+	ASSERT (sema != NULL);		// 초기화할 세마포어 포인터가 유효한 메모리 주소인지 검사
 
-	sema->value = value;
-	list_init (&sema->waiters);
+	sema->value = value;		// 세마포어가 관리할 자원 갯수 설정
+	list_init (&sema->waiters);	// waiterfs 초기화
 }
 
 /* Down or "P" operation on a semaphore.  Waits for SEMA's value
@@ -66,10 +69,10 @@ sema_down (struct semaphore *sema) {
 
 	old_level = intr_disable ();// 인터럽트 비활성화
 
-	while (sema->value == 0) {	// 가용가능한 공유자원이 없는 경우
+	while (sema->value <= 0) {	// 가용가능한 공유자원이 없는 경우
 
 		list_insert_ordered(&sema->waiters, &thread_current()->elem, priority_sort, NULL); // waiters에 넣기(우선순위 순서대로)
-		
+
 		thread_block ();		// 스레드 block 
 	}
 
@@ -234,8 +237,8 @@ lock_release (struct lock *lock) {
 	ASSERT (lock != NULL);
 	ASSERT (lock_held_by_current_thread (lock));
 
-	lock->holder = NULL;
-	sema_up (&lock->semaphore);
+	lock->holder = NULL;			// unlock
+	sema_up (&lock->semaphore);		// 다른 스레드가 unlock한 자원을 사용가능하게함
 }
 
 /* Returns true if the current thread holds LOCK, false
@@ -294,9 +297,13 @@ cond_wait (struct condition *cond, struct lock *lock) {
 	ASSERT (lock_held_by_current_thread (lock));
 
 	sema_init (&waiter.semaphore, 0);
+
 	list_push_back (&cond->waiters, &waiter.elem);
+
 	lock_release (lock);
+
 	sema_down (&waiter.semaphore);
+
 	lock_acquire (lock);
 }
 
@@ -315,6 +322,8 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
 	ASSERT (lock_held_by_current_thread (lock));
 
 	if (!list_empty (&cond->waiters))
+		// cond->waiters 정렬 필요
+		list_sort(&cond->waiters,cond_sort,NULL);
 		sema_up (&list_entry (list_pop_front (&cond->waiters),
 					struct semaphore_elem, elem)->semaphore);
 }
@@ -333,3 +342,23 @@ cond_broadcast (struct condition *cond, struct lock *lock) {
 	while (!list_empty (&cond->waiters))
 		cond_signal (cond, lock);
 }
+
+bool cond_sort(const struct list_elem *a,const struct list_elem *b, void *aux UNUSED){
+
+	// 이미 알고 있는 elem의 주소(a)를 바탕으로
+	// elem을 품고 있는 semaphore_elem 구조체 본체의 맨 앞 시작 주소를 역산해서 sa에 저장
+	struct semaphore_elem *sa = list_entry (a, struct semaphore_elem, elem);
+    struct semaphore_elem *sb = list_entry (b, struct semaphore_elem, elem);
+
+	// 각 세마포어(sa, sb) 대기열에서 각각 맨 앞 스레드 1개씩(총 2개) 스레드를 가져옴
+    struct thread *ta = list_entry (list_begin (&sa->semaphore.waiters), struct thread, elem);
+    struct thread *tb = list_entry (list_begin (&sb->semaphore.waiters), struct thread, elem);
+
+	// 앞 스레드가 우선순위가 높다면 그대로 두기
+	if(ta->priority > tb->priority) return true;
+
+	// 뒤 스레드가 우선순위가 높다면 바꿔주기
+	else return false;
+
+}
+
